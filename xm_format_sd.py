@@ -4,16 +4,16 @@
 ================================================================================
 XM-DualStorage SD Card Formatter (Xiongmai XM530 / XM510 / XM550 / Sofia)
 ================================================================================
-Herramienta universal multiplataforma (Windows y Linux) para particionar y
-preparar físicamente tarjetas MicroSD con arquitectura de Doble Almacenamiento:
+Cross-platform tool (Windows & Linux) to physically partition and prepare
+MicroSD cards for the Dual-Storage architecture:
 
-- Partición 1 (FAT32 - 'XM_BOOT'):
-    Espacio de usuario para scripts, modificaciones y acceso Telnet Root.
-    (512MB en tarjetas de 2GB; 1GB en 4GB; 2GB en tarjetas de 8GB+)
-- Partición 2 (Resto del disco - WFS Video):
-    Reservada para la grabación continua de video del sistema de vigilancia Sofia.
+- Partition 1 (FAT32 - 'XM_BOOT'):
+    User space for custom automation scripts, binaries, Telnet (:23) & FTP (:21).
+    (512 MB for 2GB cards; 1GB for 4GB cards; 2GB for 8GB+ cards)
+- Partition 2 (Remaining disk space - Sofia WFS Video):
+    Isolated partition reserved for 24/7 continuous native surveillance recording.
 
-Soluciona el Error 1002 y previene formateos destructivos automáticos.
+Fixes Error 1002 and prevents destructive vendor auto-formatting.
 ================================================================================
 """
 
@@ -26,10 +26,10 @@ import shutil
 import tempfile
 import json
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # ==============================================================================
-# HOOK UNIVERSAL LIMPIO (sd_run.sh)
+# UNIVERSAL HOOK TEMPLATE (sd_run.sh)
 # ==============================================================================
 
 UNIVERSAL_SD_RUN_SH = """#!/bin/sh
@@ -41,13 +41,13 @@ UNIVERSAL_SD_RUN_SH = """#!/bin/sh
 # card is detected.
 #
 # Architecture:
-# - Partition 1 (FAT32, mounted at /home): Custom scripts, binaries & Telnet root.
+# - Partition 1 (FAT32, mounted at /home): Custom scripts, binaries & Telnet/FTP access.
 # - Partition 2 (WFS Raw Block Device): Dedicated solely to continuous surveillance video.
 #
 # Key Features:
 # 1. Kernel Block Shield: Redirects /dev/mmcblk0 to Partition 2 (Major 179, Minor 2)
 #    preventing Sofia from wiping or formatting the FAT32 boot partition (Fixes Error 1002).
-# 2. Root Access: Spawns background telnetd service on port 23.
+# 2. Remote Access: Spawns Telnet (port 23) and optional FTP server (port 21).
 # 3. Clean Coexistence: Automatically launches Sofia in the background to record video.
 # ==============================================================================
 
@@ -87,11 +87,11 @@ exit 0
 """
 
 # ==============================================================================
-# UTILIDADES Y PRIVILEGIOS
+# UTILITIES AND PRIVILEGES
 # ==============================================================================
 
 def is_admin():
-    """Verifica si el script cuenta con privilegios de Administrador / Root."""
+    """Checks whether the script is running with Administrator / root privileges."""
     if platform.system() == "Windows":
         try:
             import ctypes
@@ -102,7 +102,7 @@ def is_admin():
         return os.geteuid() == 0
 
 def elevate_windows():
-    """Solicita elevacion de privilegios UAC en Windows."""
+    """Requests Windows UAC elevation prompt."""
     import ctypes
     params = " ".join([f'"{arg}"' for arg in sys.argv])
     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
@@ -111,17 +111,17 @@ def elevate_windows():
 def print_banner():
     print("""
 ================================================================================
-          XM-DUALSTORAGE: FORMATEADOR FISICO DE MICROSD (XM530 / SOFIA)
+          XM-DUALSTORAGE: MICROSD CARD FORMATTER (XM530 / SOFIA)
                                 Version """ + VERSION + """
 ================================================================================
 """)
 
 # ==============================================================================
-# DETECCION Y FORMATEO EN WINDOWS
+# WINDOWS DISK DETECTION & FORMATTING
 # ==============================================================================
 
 def get_disks_windows():
-    """Lista los discos físicos en Windows utilizando PowerShell, incluyendo letras de unidad."""
+    """Enumerates physical disks in Windows via PowerShell, mapping drive letters."""
     ps_disks = (
         "Get-Disk | Select-Object Number, FriendlyName, Size, BusType, IsBoot, IsSystem "
         "| ConvertTo-Json"
@@ -141,7 +141,7 @@ def get_disks_windows():
         if isinstance(data, dict):
             data = [data]
 
-        # Mapear letras de unidad por número de disco
+        # Map drive letters by disk number
         letters_map = {}
         try:
             p_p = subprocess.run(
@@ -168,7 +168,7 @@ def get_disks_windows():
             letters = letters_map.get(dn, [])
             disks.append({
                 "number": dn,
-                "name": d.get("FriendlyName", "Disco Desconocido"),
+                "name": d.get("FriendlyName", "Unknown Disk"),
                 "size_bytes": size_bytes,
                 "size_gb": size_gb,
                 "bus": d.get("BusType", "Unknown"),
@@ -178,11 +178,11 @@ def get_disks_windows():
             })
         return disks
     except Exception as e:
-        print(f"[!] Error consultando discos: {e}")
+        print(f"[!] Error querying disks: {e}")
         return []
 
 def get_volume_letter_by_label_windows(label="XM_BOOT"):
-    """Localiza la letra de unidad asignada a la partición recién formateada."""
+    """Locates the drive letter assigned to the freshly formatted partition."""
     ps_cmd = f"Get-Volume -FileSystemLabel '{label}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DriveLetter"
     for _ in range(10):
         time.sleep(1)
@@ -200,25 +200,25 @@ def get_volume_letter_by_label_windows(label="XM_BOOT"):
     return None
 
 def calculate_fat32_size_mb(size_bytes):
-    """Calcula dinámicamente el tamaño de la Partición 1 (FAT32) según la capacidad total."""
+    """Calculates Partition 1 (FAT32) size dynamically according to total card capacity."""
     size_mb = size_bytes / (1024 * 1024)
     if size_mb <= 2200:
-        return 512   # Tarjetas de 2GB: 512 MB boot, ~1.4 GB para video Sofia
+        return 512   # 2GB cards: 512 MB boot/scripts, ~1.4 GB for Sofia video
     elif size_mb <= 4500:
-        return 1024  # Tarjetas de 4GB: 1024 MB boot, ~3 GB para video Sofia
+        return 1024  # 4GB cards: 1024 MB boot/scripts, ~3 GB for Sofia video
     else:
-        return 2048  # Tarjetas de 8GB o más: 2048 MB boot, resto para video Sofia
+        return 2048  # 8GB+ cards: 2048 MB boot/scripts, remainder for Sofia video
 
 def format_disk_windows(disk_number, size_bytes):
-    """Ejecuta DiskPart para crear el esquema MBR Dual: FAT32 (Boot) + RAW (Video Sofia)."""
+    """Executes DiskPart to create Dual MBR layout: FAT32 (Boot) + RAW (Sofia Video)."""
     fat32_mb = calculate_fat32_size_mb(size_bytes)
-    print(f"[*] Calculando particiones: Particion 1 (FAT32) = {fat32_mb} MB | Particion 2 (Video Sofia) = Resto")
+    print(f"[*] Calculating partitions: Partition 1 (FAT32) = {fat32_mb} MB | Partition 2 (Sofia WFS) = Remainder")
 
-    # Script DiskPart limpio y compatible:
-    # 1. Limpia la tabla MBR
-    # 2. Crea partición 1 primaria en FAT32 etiquetada 'XM_BOOT'
-    # 3. Asigna letra de unidad automáticamente
-    # 4. Crea partición 2 primaria sin formatear para Sofia (WFS)
+    # Clean & compatible DiskPart sequence:
+    # 1. Wipe partition table (MBR)
+    # 2. Create primary partition 1 in FAT32 labeled 'XM_BOOT'
+    # 3. Automatically assign mount point / drive letter
+    # 4. Create primary partition 2 unformatted for Sofia (WFS)
     script_content = f"""select disk {disk_number}
 clean
 convert mbr
@@ -232,29 +232,29 @@ create partition primary
         script_path = tf.name
 
     try:
-        print("[*] Ejecutando DiskPart para particionar en MBR...")
+        print("[*] Running DiskPart to configure MBR Dual-Storage...")
         proc = subprocess.run(
             ["diskpart", "/s", script_path],
             capture_output=True,
             text=True
         )
         if proc.returncode != 0:
-            print("[!] Error durante DiskPart:")
+            print("[!] Error during DiskPart execution:")
             print(proc.stdout)
             return False
 
-        print(f"[+] Particion 1 (FAT32, {fat32_mb}MB) y Particion 2 (Sofia WFS) creadas con exito.")
+        print(f"[+] Partition 1 (FAT32, {fat32_mb}MB) and Partition 2 (Sofia WFS) created successfully.")
         return True
     finally:
         if os.path.exists(script_path):
             os.remove(script_path)
 
 # ==============================================================================
-# DETECCION Y FORMATEO EN LINUX
+# LINUX DISK DETECTION & FORMATTING
 # ==============================================================================
 
 def get_disks_linux():
-    """Lista los dispositivos de almacenamiento en Linux mediante lsblk."""
+    """Enumerates storage block devices in Linux via lsblk."""
     try:
         p = subprocess.run(
             ["lsblk", "-d", "-b", "-n", "-o", "NAME,SIZE,ROTA,RM,MODEL"],
@@ -273,7 +273,7 @@ def get_disks_linux():
             size_bytes = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
             size_gb = round(size_bytes / (1024**3), 2)
             rm = parts[3] if len(parts) > 3 else "0"
-            model = " ".join(parts[4:]) if len(parts) > 4 else "Generico"
+            model = " ".join(parts[4:]) if len(parts) > 4 else "Generic"
             disks.append({
                 "dev": f"/dev/{name}",
                 "name": f"{name} ({model})",
@@ -283,75 +283,75 @@ def get_disks_linux():
             })
         return disks
     except Exception as e:
-        print(f"[!] Error listando discos: {e}")
+        print(f"[!] Error listing disks: {e}")
         return []
 
 def format_disk_linux(dev_path, size_bytes):
-    """Particiona en MBR y formatea la partición 1 en FAT32 en Linux."""
+    """Partitions MBR layout and formats Partition 1 as FAT32 in Linux."""
     try:
         fat32_mb = calculate_fat32_size_mb(size_bytes)
-        print(f"[*] Creando tabla de particiones MBR en {dev_path}...")
+        print(f"[*] Creating MBR partition table on {dev_path}...")
         subprocess.run(["parted", "-s", dev_path, "mklabel", "msdos"], check=True)
-        print(f"[*] Creando Particion 1 (FAT32, {fat32_mb} MB)...")
+        print(f"[*] Creating Partition 1 (FAT32, {fat32_mb} MB)...")
         subprocess.run(["parted", "-s", dev_path, "mkpart", "primary", "fat32", "1MiB", f"{fat32_mb + 1}MiB"], check=True)
-        print("[*] Creando Particion 2 (Video Sofia WFS / Linux)...")
+        print("[*] Creating Partition 2 (Sofia WFS Video / Linux)...")
         subprocess.run(["parted", "-s", dev_path, "mkpart", "primary", f"{fat32_mb + 1}MiB", "100%"], check=True)
 
         p1 = f"{dev_path}1" if not dev_path[-1].isdigit() else f"{dev_path}p1"
-        print(f"[*] Formateando {p1} en FAT32...")
+        print(f"[*] Formatting {p1} as FAT32...")
         subprocess.run(["mkfs.vfat", "-F", "32", "-n", "XM_BOOT", p1], check=True)
         return p1
     except Exception as e:
-        print(f"[!] Error durante el formateo en Linux: {e}")
+        print(f"[!] Error during Linux partitioning: {e}")
         return None
 
 # ==============================================================================
-# DESPLIEGUE DEL HOOK UNIVERSAL
+# STARTER KIT DEPLOYMENT
 # ==============================================================================
 
 def write_starter_kit(dest_dir):
-    """Instala el hook sd_run.sh y las carpetas base en la particion FAT32."""
-    print(f"\n[*] Instalando hook universal en: {dest_dir}")
+    """Installs sd_run.sh hook, protection flag, and directories onto the FAT32 partition."""
+    print(f"\n[*] Installing universal starter kit to: {dest_dir}")
 
-    # Carpetas requeridas
+    # Required base folders
     for folder in ["cam_00", "log", "conf", "backups"]:
         os.makedirs(os.path.join(dest_dir, folder), exist_ok=True)
 
-    # sd_run.sh con saltos de línea LF (Linux)
+    # sd_run.sh with native Linux LF line endings
     sd_run_path = os.path.join(dest_dir, "sd_run.sh")
     with open(sd_run_path, "wb") as f:
         f.write(UNIVERSAL_SD_RUN_SH.replace("\r\n", "\n").encode("utf-8"))
-    print("  [+] Creado: sd_run.sh (Hook de blindaje y arranque automatico)")
+    print("  [+] Created: sd_run.sh (Kernel Block Shield & Auto-start hook)")
 
-    # Testigo FormatOk
+    # FormatOk protection witness flag
     format_ok_path = os.path.join(dest_dir, "FormatOk")
     with open(format_ok_path, "wb") as f:
         pass
-    print("  [+] Creado: FormatOk (Testigo de proteccion contra sobreescrituras)")
+    print("  [+] Created: FormatOk (Vendor overwrite protection flag)")
 
-    # Opcional: Si el usuario tiene un binario busybox en la misma carpeta del script, copiarlo
+    # Optional: Bundled static ARMv7l busybox if present in script folder
     script_dir = os.path.dirname(os.path.abspath(__file__))
     for cand in ["busybox-armv7l", "busybox"]:
         candidate_path = os.path.join(script_dir, cand)
         if os.path.isfile(candidate_path) and os.path.getsize(candidate_path) > 100000:
             shutil.copy2(candidate_path, os.path.join(dest_dir, "busybox"))
-            print(f"  [+] Binario incluido: busybox (desde {cand})")
+            print(f"  [+] Bundled binary: busybox (copied from {cand})")
             break
 
 # ==============================================================================
-# MENU PRINCIPAL
+# MAIN ENTRYPOINT
 # ==============================================================================
 
 def main():
     print_banner()
 
-    # Comprobación de permisos
+    # Privilege check
     if not is_admin():
         if platform.system() == "Windows":
-            print("[*] Solicitando permisos de Administrador para gestionar discos...")
+            print("[*] Requesting Administrator privileges to manage storage disks...")
             elevate_windows()
         else:
-            print("[!] Ejecuta el script con privilegios root: sudo python3 xm_format_sd.py")
+            print("[!] Please run with root privileges: sudo python3 xm_format_sd.py")
             sys.exit(1)
 
     os_type = platform.system()
@@ -359,34 +359,34 @@ def main():
     if os_type == "Windows":
         disks = get_disks_windows()
         if not disks:
-            print("[!] No se detectaron discos en el sistema.")
+            print("[!] No storage disks detected on the system.")
             sys.exit(1)
 
-        print("Discos detectados en tu equipo:\n")
+        print("Storage disks detected on your machine:\n")
         selectable = []
         drive_to_disk = {}
 
         for d in disks:
             is_sys = d["is_boot"] or d["is_system"]
-            tag = " [DISCO DEL SISTEMA - BLOQUEADO]" if is_sys else ""
+            tag = " [SYSTEM DISK - PROTECTED]" if is_sys else ""
             bus_tag = f"[{d['bus']}]"
-            letters_str = f" [Unidad: {', '.join(d['letters'])}]" if d["letters"] else ""
+            letters_str = f" [Drive: {', '.join(d['letters'])}]" if d["letters"] else ""
             print(f"  [{d['number']}] {d['name']} ({d['size_gb']} GB) {bus_tag}{letters_str}{tag}")
-            
+
             if not is_sys:
                 selectable.append(d["number"])
                 for ltr in d["letters"]:
                     drive_to_disk[ltr.replace(":", "").upper()] = d["number"]
 
         if not selectable:
-            print("\n[!] No se encontraron unidades extraibles disponibles.")
-            print("[i] Conecta tu tarjeta MicroSD mediante un lector USB y vuelve a ejecutar el script.")
+            print("\n[!] No removable storage drives available.")
+            print("[i] Please plug in your MicroSD card via a USB reader and run the script again.")
             sys.exit(0)
 
         print("\n" + "-"*75)
-        raw_choice = input("\nIntroduce el NUMERO de disco (ej. 4) o la LETRA de unidad (ej. H) (o 'q' para salir): ").strip().upper()
+        raw_choice = input("\nEnter disk NUMBER (e.g. 4) or drive LETTER (e.g. H) ('q' to quit): ").strip().upper()
         if raw_choice == 'Q' or not raw_choice:
-            print("[*] Operacion cancelada.")
+            print("[*] Operation canceled.")
             sys.exit(0)
 
         target_disk = None
@@ -396,20 +396,20 @@ def main():
             target_disk = int(clean_choice)
         elif clean_choice in drive_to_disk:
             target_disk = drive_to_disk[clean_choice]
-            print(f"[*] Letra {clean_choice}: identificada correctamente como Disco {target_disk}.")
+            print(f"[*] Drive letter {clean_choice}: matched to Disk {target_disk}.")
         else:
-            print(f"[!] Opcion '{raw_choice}' no valida.")
+            print(f"[!] Invalid selection: '{raw_choice}'.")
             sys.exit(1)
 
         if target_disk not in selectable:
-            print("[!] Numero de disco no valido o protegido por ser disco del sistema.")
+            print("[!] Selected disk number is invalid or protected as a system drive.")
             sys.exit(1)
 
         chosen = next(d for d in disks if d["number"] == target_disk)
-        print(f"\n[!] ATENCION: Se BORRARAN todos los datos en el Disco {target_disk} ({chosen['name']}, {chosen['size_gb']} GB).")
-        confirm = input("Escribe 'SI' para confirmar el formateo: ").strip().upper()
-        if confirm not in ["SI", "YES"]:
-            print("[*] Cancelado por el usuario.")
+        print(f"\n[!] WARNING: ALL DATA ON DISK {target_disk} ({chosen['name']}, {chosen['size_gb']} GB) WILL BE PERMANENTLY ERASED.")
+        confirm = input("Type 'YES' to confirm formatting: ").strip().upper()
+        if confirm not in ["YES", "Y", "SI", "S"]:
+            print("[*] Operation canceled by user.")
             sys.exit(0)
 
         success = format_disk_windows(target_disk, chosen["size_bytes"])
@@ -418,7 +418,7 @@ def main():
 
         drive_letter = get_volume_letter_by_label_windows("XM_BOOT")
         if not drive_letter:
-            drive_letter = input("Introduce la letra de unidad asignada a XM_BOOT (ej. H:): ").strip().upper()
+            drive_letter = input("Enter drive letter assigned to XM_BOOT (e.g. H:): ").strip().upper()
             if not drive_letter.endswith(":"):
                 drive_letter += ":"
 
@@ -428,27 +428,27 @@ def main():
         # Linux
         disks = get_disks_linux()
         if not disks:
-            print("[!] No se detectaron discos.")
+            print("[!] No storage disks detected.")
             sys.exit(1)
 
-        print("Dispositivos detectados:\n")
+        print("Storage devices detected:\n")
         for i, d in enumerate(disks):
-            tag = "[EXTRAIBLE/SD]" if d["removable"] else "[DISCO FIJO]"
+            tag = "[REMOVABLE/SD]" if d["removable"] else "[FIXED DISK]"
             print(f"  [{i}] {d['dev']} - {d['name']} ({d['size_gb']} GB) {tag}")
 
-        choice = input("\nIntroduce el indice del dispositivo (ej. 1) o 'q' para cancelar: ").strip()
+        choice = input("\nEnter device index (e.g. 1) or 'q' to cancel: ").strip()
         if choice.lower() == 'q' or not choice.isdigit():
             sys.exit(0)
 
         idx = int(choice)
         if idx < 0 or idx >= len(disks):
-            print("[!] Indice no valido.")
+            print("[!] Invalid index.")
             sys.exit(1)
 
         target = disks[idx]
-        print(f"\n[!] ATENCION: Se borraran todos los datos en {target['dev']}.")
-        confirm = input("Escribe 'SI' para proceder: ").strip().upper()
-        if confirm != "SI":
+        print(f"\n[!] WARNING: ALL DATA ON {target['dev']} WILL BE PERMANENTLY ERASED.")
+        confirm = input("Type 'YES' to proceed: ").strip().upper()
+        if confirm not in ["YES", "Y", "SI", "S"]:
             sys.exit(0)
 
         p1 = format_disk_linux(target["dev"], target["size_bytes"])
@@ -464,19 +464,19 @@ def main():
 
     print("""
 ================================================================================
-                    ¡TARJETA MICROSD PREPARADA CON EXITO!
+                    MICROSD CARD PREPARED SUCCESSFULLY!
 ================================================================================
-Estructura lista para cualquier usuario:
-  - Particion 1 (FAT32 - 'XM_BOOT'):
-      Contiene 'sd_run.sh' para iniciar el sistema y activar Telnet Root.
-  - Particion 2 (Video Sofia WFS, Resto del espacio):
-      Aislada para la grabacion de video nativa continua de Sofia.
+Ready Dual-Storage layout:
+  - Partition 1 (FAT32 - 'XM_BOOT'):
+      Contains 'sd_run.sh' for root access, Telnet (:23), and FTP (:21).
+  - Partition 2 (Sofia WFS Video, remaining space):
+      Isolated for continuous native surveillance video recording.
 
-Instrucciones para el usuario:
-  1. Expulsa la tarjeta de forma segura de tu computadora.
-  2. Introducela en la ranura de la camara Xiongmai apagada.
-  3. Enciende la camara. Arrancara en ~16 segundos con grabacion activa
-     y acceso Telnet en el puerto 23.
+Instructions for user:
+  1. Safely eject the MicroSD card from your computer.
+  2. Insert it into the slot of your powered-off Xiongmai camera.
+  3. Power on the camera. It will boot in ~16 seconds with 24/7 recording
+     active and Telnet / FTP root access available!
 ================================================================================
 """)
 
